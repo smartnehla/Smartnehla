@@ -10,6 +10,10 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: control-center
+    description: Provider connection health and dashboard summary
+  - name: jobs
+    description: App generation and deployment workflow
 paths:
   /healthz:
     get:
@@ -24,6 +28,129 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /control-center/connections:
+    get:
+      operationId: getConnections
+      tags: [control-center]
+      summary: Check configured provider connections
+      responses:
+        "200":
+          description: Provider connection health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectionsResponse"
+  /control-center/dashboard:
+    get:
+      operationId: getDashboard
+      tags: [control-center]
+      summary: Load dashboard totals and recent jobs
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardResponse"
+  /jobs:
+    get:
+      operationId: listJobs
+      tags: [jobs]
+      summary: List recent app-generation jobs
+      responses:
+        "200":
+          description: Recent jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Job"
+  /jobs/preview:
+    post:
+      operationId: previewJob
+      tags: [jobs]
+      summary: Generate a preview for user review
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobPrompt"
+      responses:
+        "201":
+          description: Generated preview requiring confirmation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobPreview"
+  /jobs/{id}:
+    get:
+      operationId: getJob
+      tags: [jobs]
+      summary: Get a job and its preview status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          description: Job not found
+  /jobs/{id}/logs:
+    get:
+      operationId: getJobLogs
+      tags: [jobs]
+      summary: List persisted workflow log entries
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Job log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JobLog"
+  /jobs/{id}/run:
+    post:
+      operationId: runJob
+      tags: [jobs]
+      summary: Confirm and run an approved preview
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobConfirmation"
+      responses:
+        "202":
+          description: Job accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +160,155 @@ components:
           type: string
       required:
         - status
+    ProviderConnection:
+      type: object
+      required: [provider, status, message, checkedAt]
+      properties:
+        provider:
+          type: string
+          enum: [github, supabase, vercel]
+        status:
+          type: string
+          enum: [connected, missing, error]
+        message:
+          type: string
+        checkedAt:
+          type: string
+          format: date-time
+    ConnectionsResponse:
+      type: object
+      required: [providers]
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderConnection"
+    JobStatus:
+      type: string
+      enum: [preview, queued, running, succeeded, failed]
+    GeneratedFile:
+      type: object
+      required: [path, content]
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+    GeneratedColumn:
+      type: object
+      required: [name, type, nullable]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [text, integer, boolean, numeric, timestamptz, uuid]
+        nullable:
+          type: boolean
+    GeneratedTable:
+      type: object
+      required: [name, columns]
+      properties:
+        name:
+          type: string
+        columns:
+          type: array
+          items:
+            $ref: "#/components/schemas/GeneratedColumn"
+    Job:
+      type: object
+      required: [id, prompt, repoName, status, createdAt, updatedAt, fileCount, progress]
+      properties:
+        id:
+          type: string
+          format: uuid
+        prompt:
+          type: string
+        repoName:
+          type: string
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        liveUrl:
+          type: [string, "null"]
+          format: uri
+        summary:
+          type: [string, "null"]
+        fileCount:
+          type: integer
+        progress:
+          type: integer
+        error:
+          type: [string, "null"]
+    JobPrompt:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+          minLength: 12
+          maxLength: 4000
+    JobConfirmation:
+      type: object
+      required: [confirmed]
+      properties:
+        confirmed:
+          type: boolean
+    JobPreview:
+      type: object
+      required: [job, plan, files, tables]
+      properties:
+        job:
+          $ref: "#/components/schemas/Job"
+        plan:
+          type: string
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/GeneratedFile"
+        tables:
+          type: array
+          items:
+            $ref: "#/components/schemas/GeneratedTable"
+    JobLog:
+      type: object
+      required: [id, jobId, level, message, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        jobId:
+          type: string
+          format: uuid
+        level:
+          type: string
+          enum: [info, success, warning, error]
+        message:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    DashboardResponse:
+      type: object
+      required: [totalJobs, activeJobs, successfulDeployments, recentJobs, providers]
+      properties:
+        totalJobs:
+          type: integer
+        activeJobs:
+          type: integer
+        successfulDeployments:
+          type: integer
+        recentJobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderConnection"
 
