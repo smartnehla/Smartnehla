@@ -1,7 +1,9 @@
 modules = ["nodejs-24"]
 
+run = "pnpm run dev"
+
 [deployment]
-router = "application"
+run = ["sh", "-c", "pnpm run start"]
 deploymentTarget = "autoscale"
 
 [deployment.postBuild]
@@ -15,6 +17,10 @@ runButton = "Project"
 stack = "PNPM_WORKSPACE"
 expertMode = true
 
-[postMerge]
-path = "scripts/post-merge.sh"
-timeoutMs = 20000
+[[ports]]
+localPort = 3000
+externalPort = 80
+
+[[ports]]
+localPort = 5000
+externalPort = 5000
