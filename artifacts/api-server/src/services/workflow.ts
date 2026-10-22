@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull, lt, or } from "drizzle-orm";
 import {
   db,
   solutionJobLogsTable,
@@ -20,17 +20,17 @@ const repoPackage = (name: string) =>
         start: "next start",
       },
       dependencies: {
-        "@supabase/supabase-js": "^2.57.0",
-        "lucide-react": "^0.468.0",
-        next: "^15.5.0",
-        react: "^19.1.0",
-        "react-dom": "^19.1.0",
+        "@supabase/supabase-js": "2.118.0",
+        "lucide-react": "0.545.0",
+        next: "16.4.2",
+        react: "19.3.0",
+        "react-dom": "19.3.0",
       },
       devDependencies: {
-        "@types/node": "^22.0.0",
-        "@types/react": "^19.0.0",
-        "@types/react-dom": "^19.0.0",
-        typescript: "^5.9.0",
+        "@types/node": "25.9.6",
+        "@types/react": "19.3.0",
+        "@types/react-dom": "19.3.0",
+        typescript: "5.9.3",
       },
     },
     null,
@@ -143,7 +143,11 @@ async function createRepositoryAndPush(job: SolutionJob): Promise<string> {
       force: false,
     }),
   );
-  return `https://github.com/${repo.owner.login}/${repo.name}`;
+  const repositoryUrl = `https://github.com/${repo.owner.login}/${repo.name}`;
+  await db.update(solutionJobsTable)
+    .set({ repositoryUrl })
+    .where(eq(solutionJobsTable.id, job.id));
+  return repositoryUrl;
 }
 
 function quoteIdentifier(value: string): string {
@@ -164,7 +168,7 @@ function buildSupabaseSql(job: SolutionJob): string {
   } as const;
   return job.generatedTables
     .map((table) => {
-      const tableName = quoteIdentifier(`sn_${job.repoName.replaceAll("-", "_")}_${table.name}`);
+      const tableName = quoteIdentifier(`sn_${job.id.replaceAll("-", "").slice(0, 8)}_${table.name}`);
       const columns = table.columns.map((column) => {
         if (column.name === "id" || column.name === "created_at") {
           throw new Error("Generated table columns cannot redefine id or created_at.");
@@ -172,7 +176,7 @@ function buildSupabaseSql(job: SolutionJob): string {
         const nullable = column.nullable ? "" : " not null";
         return `${quoteIdentifier(column.name)} ${typeMap[column.type as keyof typeof typeMap]}${nullable}`;
       });
-      return `create table if not exists public.${tableName} ("id" uuid primary key default gen_random_uuid(), "created_at" timestamptz not null default now()${columns.length ? `, ${columns.join(", ")}` : ""});`;
+      return `create table if not exists public.${tableName} ("id" uuid primary key default gen_random_uuid(), "created_at" timestamptz not null default now()${columns.length ? `, ${columns.join(", ")}` : ""}); alter table public.${tableName} enable row level security;`;
     })
     .join("\n");
 }
@@ -221,17 +225,77 @@ async function vercelRequest(path: string, method = "GET", data?: unknown): Prom
   });
 }
 
+function vercelScopeQuery(extra: Record<string, string> = {}): string {
+  const params = new URLSearchParams(extra);
+  if (process.env.VERCEL_TEAM_ID) params.set("teamId", process.env.VERCEL_TEAM_ID);
+  return params.toString();
+}
+
+async function createVercelProject(job: SolutionJob): Promise<void> {
+  const query = vercelScopeQuery();
+  const projectSettings = {
+    name: job.repoName,
+    framework: "nextjs",
+    buildCommand: "npm run build",
+    installCommand: "npm install",
+    outputDirectory: ".next",
+    skipGitConnectDuringLink: true,
+  };
+  const createResponse = await vercelRequest(
+    `/v11/projects${query ? `?${query}` : ""}`,
+    "POST",
+    projectSettings,
+  );
+  if (createResponse.ok) return;
+
+  // A retried worker can safely reuse the unique project name for this job.
+  const getQuery = vercelScopeQuery();
+  const existingResponse = await vercelRequest(
+    `/v10/projects/${encodeURIComponent(job.repoName)}${getQuery ? `?${getQuery}` : ""}`,
+  );
+  if (!existingResponse.ok) {
+    throw new Error(
+      createResponse.status === 401 || createResponse.status === 403
+        ? "Vercel rejected the token or its project permissions."
+        : `Vercel could not create a project (${createResponse.status}).`,
+    );
+  }
+}
+
+async function configureVercelSupabase(job: SolutionJob): Promise<void> {
+  if (job.generatedTables.length === 0) return;
+  const url = process.env.SUPABASE_URL;
+  const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
+  if (!url || !publishableKey) throw new Error("Supabase public project settings are not configured.");
+
+  for (const [key, value] of [
+    ["NEXT_PUBLIC_SUPABASE_URL", url],
+    ["NEXT_PUBLIC_SUPABASE_ANON_KEY", publishableKey],
+  ]) {
+    const query = vercelScopeQuery({ upsert: "true" });
+    const response = await vercelRequest(
+      `/v10/projects/${encodeURIComponent(job.repoName)}/env?${query}`,
+      "POST",
+      { key, value, type: "plain", target: ["production", "preview", "development"] },
+    );
+    if (!response.ok) {
+      throw new Error(`Vercel could not configure ${key} (${response.status}).`);
+    }
+  }
+}
+
 async function deployToVercel(job: SolutionJob): Promise<string> {
+  await createVercelProject(job);
+  await configureVercelSupabase(job);
   const files = ensureSafeFiles(job).map((file) => ({
     file: file.path,
     data: Buffer.from(file.content, "utf8").toString("base64"),
     encoding: "base64",
   }));
-  const teamId = process.env.VERCEL_TEAM_ID;
-  const params = new URLSearchParams({ forceNew: "1", skipAutoDetectionConfirmation: "1" });
-  if (teamId) params.set("teamId", teamId);
+  const params = vercelScopeQuery({ forceNew: "1", skipAutoDetectionConfirmation: "1" });
   const response = await vercelRequest(`/v13/deployments?${params}`, "POST", {
     name: job.repoName,
+    project: job.repoName,
     files,
     projectSettings: {
       framework: "nextjs",
@@ -274,7 +338,7 @@ async function deployToVercel(job: SolutionJob): Promise<string> {
       }
 
       const eventsResponse = await vercelRequest(
-        `/v3/deployments/${encodeURIComponent(deployment.id)}/events?limit=30`,
+        `/v3/deployments/${encodeURIComponent(deployment.id)}/events?${vercelScopeQuery({ limit: "30" })}`,
       );
       if (eventsResponse.ok) {
         const events = (await eventsResponse.json()) as Array<{
@@ -309,13 +373,23 @@ export async function writeJobLog(
   level: "info" | "success" | "warning" | "error",
   message: string,
 ): Promise<void> {
-  await db.insert(solutionJobLogsTable).values({ jobId, level, message: message.slice(0, 2000) });
+  const safeMessage = message
+    .replace(/(?:gh[pousr]_[A-Za-z0-9]{20,}|sb_secret_[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]{30,})/g, "[redacted credential]")
+    .replace(/(?:api[_-]?key|access[_-]?token|secret)\s*[:=]\s*["']?[A-Za-z0-9_./+=-]{20,}/gi, "[redacted credential]");
+  await db.insert(solutionJobLogsTable).values({ jobId, level, message: safeMessage.slice(0, 2000) });
 }
 
 async function runJob(job: SolutionJob): Promise<void> {
+  const heartbeat = setInterval(() => {
+    void db.update(solutionJobsTable)
+      .set({ workerLeaseUntil: new Date(Date.now() + 120_000) })
+      .where(eq(solutionJobsTable.id, job.id))
+      .catch((error: unknown) => logger.error({ jobId: job.id, err: error }, "Could not renew job worker lease"));
+  }, 30_000);
+  heartbeat.unref();
   try {
     await db.update(solutionJobsTable)
-      .set({ status: "running", progress: 5, error: null })
+      .set({ status: "running", progress: 5, error: null, workerLeaseUntil: new Date(Date.now() + 120_000) })
       .where(eq(solutionJobsTable.id, job.id));
     await writeJobLog(job.id, "info", "Checking provider authorization.");
     await writeJobLog(job.id, "info", "Creating the private GitHub repository.");
@@ -339,16 +413,25 @@ async function runJob(job: SolutionJob): Promise<void> {
     await writeJobLog(job.id, "info", "Submitting the reviewed project to Vercel.");
     const liveUrl = await deployToVercel(job);
     await db.update(solutionJobsTable)
-      .set({ status: "succeeded", progress: 100, liveUrl: liveUrl, error: null })
+      .set({ status: "succeeded", progress: 100, liveUrl, error: null, workerLeaseUntil: null })
       .where(eq(solutionJobsTable.id, job.id));
     await writeJobLog(job.id, "success", `Deployment is live at ${liveUrl}`);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "The workflow failed unexpectedly.";
+    const message = error instanceof Error
+      ? error.message
+        .replace(/(?:gh[pousr]_[A-Za-z0-9]{20,}|sb_secret_[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]{30,})/g, "[redacted credential]")
+        .replace(/(?:api[_-]?key|access[_-]?token|secret)\s*[:=]\s*["']?[A-Za-z0-9_./+=-]{20,}/gi, "[redacted credential]")
+      : "The workflow failed unexpectedly.";
     await db.update(solutionJobsTable)
-      .set({ status: "failed", error: message, progress: 0 })
+      .set({ status: "failed", error: message, progress: 0, workerLeaseUntil: null })
       .where(eq(solutionJobsTable.id, job.id));
     await writeJobLog(job.id, "error", message);
-    logger.error({ jobId: job.id, err: error }, "Solution-engine workflow failed");
+    logger.error(
+      { jobId: job.id, errorName: error instanceof Error ? error.name : "UnknownError" },
+      "Solution-engine workflow failed",
+    );
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
@@ -359,12 +442,37 @@ export async function processQueuedJobs(): Promise<void> {
   workerActive = true;
   try {
     while (true) {
-      const [job] = await db.select()
+      const now = new Date();
+      const [candidate] = await db.select()
         .from(solutionJobsTable)
-        .where(eq(solutionJobsTable.status, "queued"))
+        .where(or(
+          eq(solutionJobsTable.status, "queued"),
+          and(
+            eq(solutionJobsTable.status, "running"),
+            or(isNull(solutionJobsTable.workerLeaseUntil), lt(solutionJobsTable.workerLeaseUntil, now)),
+          ),
+        ))
         .orderBy(asc(solutionJobsTable.createdAt))
         .limit(1);
-      if (!job) break;
+      if (!candidate) break;
+      const [job] = await db.update(solutionJobsTable)
+        .set({
+          status: "running",
+          progress: Math.max(candidate.progress, 5),
+          workerLeaseUntil: new Date(Date.now() + 120_000),
+        })
+        .where(and(
+          eq(solutionJobsTable.id, candidate.id),
+          or(
+            eq(solutionJobsTable.status, "queued"),
+            and(
+              eq(solutionJobsTable.status, "running"),
+              or(isNull(solutionJobsTable.workerLeaseUntil), lt(solutionJobsTable.workerLeaseUntil, now)),
+            ),
+          ),
+        ))
+        .returning();
+      if (!job) continue;
       await runJob(job);
     }
   } catch (error) {
@@ -379,11 +487,5 @@ export function startSolutionJobWorker(): void {
     void processQueuedJobs();
   }, 3000);
   interval.unref();
-  void db.update(solutionJobsTable)
-    .set({ status: "queued", progress: 0 })
-    .where(and(eq(solutionJobsTable.status, "running")))
-    .then(() => processQueuedJobs())
-    .catch((error: unknown) => {
-      logger.error({ err: error }, "Could not recover queued solution-engine jobs");
-    });
+  void processQueuedJobs();
 }

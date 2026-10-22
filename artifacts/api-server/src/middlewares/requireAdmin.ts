@@ -48,7 +48,10 @@ export const requireAdmin: RequestHandler = async (req, res, next): Promise<void
     req.userId = userId;
     next();
   } catch (error) {
-    req.log.error({ err: error }, "Unable to verify control-center administrator");
+    req.log.error(
+      { errorName: error instanceof Error ? error.name : "UnknownError" },
+      "Unable to verify control-center administrator",
+    );
     res.status(503).json({ error: "Administrator access could not be verified." });
   }
 };

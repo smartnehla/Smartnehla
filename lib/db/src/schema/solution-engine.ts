@@ -10,6 +10,7 @@ export const solutionJobsTable = pgTable("solution_jobs", {
   status: text("status").notNull().default("preview"),
   summary: text("summary"),
   plan: text("plan"),
+  repositoryUrl: text("repository_url"),
   generatedFiles: jsonb("generated_files").$type<Array<{ path: string; content: string }>>().notNull().default([]),
   generatedTables: jsonb("generated_tables").$type<Array<{
     name: string;
@@ -18,6 +19,7 @@ export const solutionJobsTable = pgTable("solution_jobs", {
   liveUrl: text("live_url"),
   error: text("error"),
   progress: integer("progress").notNull().default(0),
+  workerLeaseUntil: timestamp("worker_lease_until", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

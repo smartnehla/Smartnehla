@@ -142,7 +142,7 @@ function PublicLanding() {
                   A lightweight intake board for the field team. Track requests by site, add a photo, and show what needs attention today.
                 </div>
                 <div className="mt-4 flex items-center justify-between">
-                  <span className="flex items-center gap-2 text-[11px] text-[#8a8d91]"><CircleDot size={12} className="text-[#559375]" /> 3 providers ready</span>
+                  <span className="flex items-center gap-2 text-[11px] text-[#8a8d91]"><CircleDot size={12} className="text-[#559375]" /> Approval gate active</span>
                   <span className="rounded-lg bg-[#d85b3d] px-4 py-2 text-xs font-bold text-white">Generate preview <ArrowRight className="ml-1 inline" size={13} /></span>
                 </div>
               </div>
@@ -206,7 +206,7 @@ function StatusPill({ status }: { status: string }) {
 }
 
 function ProviderName({ provider }: { provider: string }) {
-  const logo = provider === 'github' ? <Github size={15} /> : provider === 'supabase' ? <Database size={15} /> : <TriangleAlert size={15} />;
+  const logo = provider === 'github' ? <Github size={15} /> : provider === 'supabase' ? <Database size={15} /> : <Rocket size={15} />;
   return <span className="flex items-center gap-2.5 font-semibold capitalize text-[#354052]">{logo}{provider}</span>;
 }
 
@@ -258,7 +258,7 @@ function Dashboard() {
 
   function submitPrompt(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (prompt.trim().length < 12 || !isProviderReady || preview.isPending) return;
+    if (prompt.trim().length < 12 || preview.isPending) return;
     setPreviewError('');
     preview.mutate({ data: { prompt: prompt.trim() } }, {
       onSuccess: (result: JobPreview) => {
@@ -306,11 +306,11 @@ function Dashboard() {
             <label htmlFor="solution-prompt" className="mb-2 block text-xs font-bold text-[#434a56]">Solution brief</label>
             <textarea id="solution-prompt" value={prompt} onChange={e => setPrompt(e.target.value)} minLength={12} maxLength={4000} placeholder="Example: Build an internal request board for the support team. Let them categorize issues, assign an owner, and see what is blocked..." className="focus-ring min-h-[142px] w-full resize-y rounded-xl border border-[#ded8cd] bg-[#fbf9f4] px-4 py-3.5 text-sm leading-6 text-[#343b48] placeholder:text-[#aaa69d] focus:border-[#d85b3d]" data-testid="input-solution-prompt" />
             <div className="mt-2 flex items-center justify-between text-[10px] text-[#9c9a92]"><span>Be specific about rules and what “done” looks like.</span><span className="mono">{prompt.length.toLocaleString()} / 4,000</span></div>
-            {!isProviderReady && <div className="mt-4 flex items-start gap-2 rounded-lg border border-[#ead9b6] bg-[#faf3e4] p-3 text-xs leading-5 text-[#7d6535]"><TriangleAlert size={15} className="mt-0.5 shrink-0" /><span>{providers?.length ? 'All providers must be connected before a preview can be generated.' : 'Provider readiness is unknown. Connect GitHub, Supabase, and Vercel on the server before generating.'}</span></div>}
+            {!isProviderReady && <div className="mt-4 flex items-start gap-2 rounded-lg border border-[#ead9b6] bg-[#faf3e4] p-3 text-xs leading-5 text-[#7d6535]"><TriangleAlert size={15} className="mt-0.5 shrink-0" /><span>You can create a preview now. GitHub, Supabase, and Vercel must be connected before confirming a run.</span></div>}
             {previewError && <div className="mt-4 rounded-lg bg-[#fbefea] p-3 text-xs text-[#954b3f]" role="alert">{previewError}</div>}
             <div className="mt-5 flex flex-col-reverse justify-between gap-3 sm:flex-row sm:items-center">
               <span className="flex items-center gap-1.5 text-[10px] text-[#92928c]"><ShieldCheck size={13} className="text-[#5b8a72]" /> Review is required before every run</span>
-              <button type="submit" disabled={prompt.trim().length < 12 || !isProviderReady || preview.isPending} className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg bg-[#d85b3d] px-4 py-3 text-xs font-bold text-white transition hover:bg-[#c44f35] disabled:cursor-not-allowed disabled:bg-[#d8d2c8] disabled:text-[#8c8a84]" data-testid="button-generate-preview">
+              <button type="submit" disabled={prompt.trim().length < 12 || preview.isPending} className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg bg-[#d85b3d] px-4 py-3 text-xs font-bold text-white transition hover:bg-[#c44f35] disabled:cursor-not-allowed disabled:bg-[#d8d2c8] disabled:text-[#8c8a84]" data-testid="button-generate-preview">
                 {preview.isPending ? <><LoaderCircle size={15} className="animate-spin" /> Preparing preview…</> : <>Generate preview <ArrowRight size={15} /></>}
               </button>
             </div>
@@ -401,7 +401,7 @@ function JobPage() {
   }
 
   const selectedFile = previewData?.files.find(file => file.path === activeFile);
-  const repoUrl = job?.repoName ? `https://github.com/${job.repoName.replace(/^\/+|\/+$/g, '')}` : null;
+  const repoUrl = job?.repositoryUrl ?? null;
   const isPreview = job?.status === 'preview';
   const isWorking = job?.status === 'queued' || job?.status === 'running';
 

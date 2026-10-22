@@ -81,6 +81,8 @@ export interface Job {
   id: string;
   prompt: string;
   repoName: string;
+  /** @nullable */
+  repositoryUrl: string | null;
   status: JobStatus;
   createdAt: string;
   updatedAt: string;

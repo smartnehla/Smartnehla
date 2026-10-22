@@ -1,5 +1,6 @@
 import { and, asc, desc, eq } from "drizzle-orm";
 import { Router, type IRouter } from "express";
+import rateLimit from "express-rate-limit";
 import {
   db,
   solutionJobLogsTable,
@@ -31,12 +32,29 @@ import { processQueuedJobs, writeJobLog } from "../services/workflow";
 
 const router: IRouter = Router();
 router.use(requireAdmin);
+const previewRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId ?? "authenticated",
+  message: { error: "Preview limit reached. Wait a minute before generating another." },
+});
+const runRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId ?? "authenticated",
+  message: { error: "Run limit reached. Wait a minute before confirming another job." },
+});
 
 function toPublicJob(job: SolutionJob) {
   return {
     id: job.id,
     prompt: job.prompt,
     repoName: job.repoName,
+    repositoryUrl: job.repositoryUrl,
     status: job.status,
     createdAt: job.createdAt.toISOString(),
     updatedAt: job.updatedAt.toISOString(),
@@ -90,7 +108,7 @@ router.get("/jobs", async (req, res): Promise<void> => {
   res.json(ListJobsResponse.parse(jobs.map(toPublicJob)));
 });
 
-router.post("/jobs/preview", async (req, res): Promise<void> => {
+router.post("/jobs/preview", previewRateLimit, async (req, res): Promise<void> => {
   const body = PreviewJobBody.safeParse(req.body);
   if (!body.success) {
     res.status(400).json({ error: "Enter a build prompt between 12 and 4,000 characters." });
@@ -105,7 +123,8 @@ router.post("/jobs/preview", async (req, res): Promise<void> => {
 
   const generated = await generateSolution(body.data.prompt);
   const id = crypto.randomUUID();
-  const repoName = normalizeRepoName(generated.name, `solution-${id.slice(0, 8)}`);
+  const baseName = normalizeRepoName(generated.name, "solution");
+  const repoName = `${baseName.slice(0, 42)}-${id.slice(0, 6)}`;
   const [job] = await db.insert(solutionJobsTable).values({
     id,
     userId: req.userId!,
@@ -163,7 +182,7 @@ router.get("/jobs/:id/logs", async (req, res): Promise<void> => {
   }))));
 });
 
-router.post("/jobs/:id/run", async (req, res): Promise<void> => {
+router.post("/jobs/:id/run", runRateLimit, async (req, res): Promise<void> => {
   const params = RunJobParams.safeParse(req.params);
   const body = RunJobBody.safeParse(req.body);
   if (!params.success || !body.success) {
@@ -192,9 +211,18 @@ router.post("/jobs/:id/run", async (req, res): Promise<void> => {
     });
     return;
   }
+  if (
+    job.generatedTables.length > 0 &&
+    (!process.env.SUPABASE_PUBLISHABLE_KEY || !process.env.SUPABASE_URL)
+  ) {
+    res.status(409).json({
+      error: "This preview creates Supabase tables. Add SUPABASE_PUBLISHABLE_KEY and SUPABASE_URL before confirming so the deployed app can be configured.",
+    });
+    return;
+  }
 
   const [queued] = await db.update(solutionJobsTable)
-    .set({ status: "queued", progress: 1, error: null })
+    .set({ status: "queued", progress: 1, error: null, workerLeaseUntil: null })
     .where(and(
       eq(solutionJobsTable.id, job.id),
       eq(solutionJobsTable.userId, req.userId!),

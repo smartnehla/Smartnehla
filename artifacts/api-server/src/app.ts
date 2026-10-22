@@ -1,5 +1,6 @@
 import express, { type Express } from "express";
 import pinoHttp from "pino-http";
+import helmet from "helmet";
 import { clerkMiddleware } from "@clerk/express";
 import { publishableKeyFromHost } from "@clerk/shared/keys";
 import router from "./routes";
@@ -31,9 +32,14 @@ app.use(
     },
   }),
 );
+app.disable("x-powered-by");
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+}));
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "128kb" }));
+app.use(express.urlencoded({ extended: true, limit: "64kb" }));
 app.use(
   clerkMiddleware((req) => ({
     publishableKey: publishableKeyFromHost(
@@ -44,5 +50,10 @@ app.use(
 );
 
 app.use("/api", router);
+app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  req.log.error({ err: error }, "Unhandled API request error");
+  if (res.headersSent) return;
+  res.status(500).json({ error: "The server could not complete this request." });
+});
 
 export default app;

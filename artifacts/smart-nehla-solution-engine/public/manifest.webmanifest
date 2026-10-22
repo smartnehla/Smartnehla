@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "Smart Nehla - Solution Engine",
+  "short_name": "Smart Nehla",
+  "description": "Private control center for reviewed micro-app generation and deployment.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f6f3eb",
+  "theme_color": "#252c3a",
+  "icons": [
+    {
+      "src": "/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

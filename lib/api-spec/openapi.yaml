@@ -217,7 +217,7 @@ components:
             $ref: "#/components/schemas/GeneratedColumn"
     Job:
       type: object
-      required: [id, prompt, repoName, status, createdAt, updatedAt, fileCount, progress]
+      required: [id, prompt, repoName, status, createdAt, updatedAt, fileCount, progress, repositoryUrl]
       properties:
         id:
           type: string
@@ -226,6 +226,9 @@ components:
           type: string
         repoName:
           type: string
+        repositoryUrl:
+          type: [string, "null"]
+          format: uri
         status:
           $ref: "#/components/schemas/JobStatus"
         createdAt:
