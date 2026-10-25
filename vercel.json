@@ -1,5 +1,4 @@
 {
-  "version": 2,
   "outputDirectory": "artifacts/smart-nehla-solution-engine/dist/public",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
